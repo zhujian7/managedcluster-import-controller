@@ -107,8 +107,8 @@ func assertManagedClusterImportSecretCreated(clusterName, createdVia string, mod
 	assertManagedClusterNameLabel(clusterName)
 	assertManagedClusterNamespaceLabel(clusterName)
 	assertManagedClusterRBAC(clusterName)
-	if len(mode) != 0 && mode[0] == constants.KlusterletDeployModeDetached {
-		assertDetachedManagedClusterImportSecret(clusterName)
+	if len(mode) != 0 && mode[0] == constants.KlusterletDeployModeHosted {
+		assertHostedManagedClusterImportSecret(clusterName)
 	} else {
 		assertManagedClusterImportSecret(clusterName)
 	}
@@ -262,7 +262,7 @@ func assertManagedClusterImportSecret(managedClusterName string) {
 	})
 }
 
-func assertDetachedManagedClusterImportSecret(managedClusterName string) {
+func assertHostedManagedClusterImportSecret(managedClusterName string) {
 	ginkgo.By("Should create the import secret", func() {
 		gomega.Expect(wait.Poll(1*time.Second, 30*time.Second, func() (bool, error) {
 			name := fmt.Sprintf("%s-import", managedClusterName)
@@ -274,7 +274,7 @@ func assertDetachedManagedClusterImportSecret(managedClusterName string) {
 				return false, err
 			}
 
-			if err := helpers.ValidateDetachedImportSecret(secret); err != nil {
+			if err := helpers.ValidateHostedImportSecret(secret); err != nil {
 				util.Logf("invalid import secret:%v", err)
 				return false, err
 			}
@@ -295,8 +295,8 @@ func assertManagedClusterDeleted(clusterName string) {
 	assertManagedClusterDeletedFromSpoke()
 }
 
-func assertDetachedManagedClusterDeleted(clusterName, managementCluster string) {
-	ginkgo.By(fmt.Sprintf("Delete the detached mode managed cluster %s", clusterName), func() {
+func assertHostedManagedClusterDeleted(clusterName, managementCluster string) {
+	ginkgo.By(fmt.Sprintf("Delete the hosted mode managed cluster %s", clusterName), func() {
 		err := hubClusterClient.ClusterV1().ManagedClusters().Delete(context.TODO(), clusterName, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
@@ -304,7 +304,7 @@ func assertDetachedManagedClusterDeleted(clusterName, managementCluster string) 
 	})
 
 	assertManagedClusterDeletedFromHub(clusterName)
-	assertDetachedManagedClusterDeletedFromSpoke(clusterName, managementCluster)
+	assertHostedManagedClusterDeletedFromSpoke(clusterName, managementCluster)
 }
 
 func assertManagedClusterDeletedFromHub(clusterName string) {
@@ -364,7 +364,7 @@ func assertManagedClusterDeletedFromSpoke() {
 	util.Logf("delete klusterlet crd spending time: %.2f seconds", time.Since(start).Seconds())
 }
 
-func assertDetachedManagedClusterDeletedFromSpoke(cluster, managementCluster string) {
+func assertHostedManagedClusterDeletedFromSpoke(cluster, managementCluster string) {
 	start := time.Now()
 	namespace := fmt.Sprintf("klusterlet-%s", cluster)
 	ginkgo.By(fmt.Sprintf("Should delete the %s namespace", namespace), func() {
@@ -407,7 +407,7 @@ func assertManagedClusterImportSecretApplied(clusterName string, mode ...string)
 			}
 
 			util.Logf("assert managed cluster %s import secret applied cluster conditions: %v", clusterName, cluster.Status.Conditions)
-			if len(mode) != 0 && mode[0] == constants.KlusterletDeployModeDetached {
+			if len(mode) != 0 && mode[0] == constants.KlusterletDeployModeHosted {
 				return meta.IsStatusConditionTrue(cluster.Status.Conditions, "ExternalManagedKubeconfigCreatedSucceeded"), nil
 			}
 			return meta.IsStatusConditionTrue(cluster.Status.Conditions, "ManagedClusterImportSucceeded"), nil
