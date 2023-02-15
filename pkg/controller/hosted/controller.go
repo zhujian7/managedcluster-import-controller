@@ -108,7 +108,7 @@ func (r *ReconcileHosted) Reconcile(ctx context.Context, request reconcile.Reque
 			return reconcile.Result{}, err
 		}
 
-		// if there no works, remove the manifest work finalizer from the managed cluster
+		// if there are no works, remove the manifest work finalizer from the managed cluster
 		if err := helpers.AssertManifestWorkFinalizer(ctx, r.clientHolder.RuntimeClient, r.recorder,
 			managedCluster, len(manifestWorks.Items)+len(hostedWorks.Items)); err != nil {
 			return reconcile.Result{}, err
@@ -135,6 +135,16 @@ func (r *ReconcileHosted) Reconcile(ctx context.Context, request reconcile.Reque
 		return reconcile.Result{}, err
 	}
 
+	managementClusterName, err := helpers.GetHostingCluster(managedCluster)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	done, err := r.validateHostingCluster(ctx, managementClusterName, managedClusterName)
+	if done {
+		return reconcile.Result{}, err
+	}
+
 	// apply klusterlet manifest works klustelet to the management namespace from import secret to trigger the joining process.
 	importSecretName := fmt.Sprintf("%s-%s", managedClusterName, constants.ImportSecretNameSuffix)
 	importSecret, err := r.informerHolder.ImportSecretLister.Secrets(managedClusterName).Get(importSecretName)
@@ -150,7 +160,7 @@ func (r *ReconcileHosted) Reconcile(ctx context.Context, request reconcile.Reque
 		return reconcile.Result{}, err
 	}
 
-	manifestWork := createHostedManifestWork(managedCluster.Name, importSecret, managementCluster)
+	manifestWork := createHostedManifestWork(managedCluster.Name, importSecret, managementClusterName)
 	err = helpers.ApplyResources(r.clientHolder, r.recorder, r.scheme, managedCluster, manifestWork)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -158,14 +168,14 @@ func (r *ReconcileHosted) Reconcile(ctx context.Context, request reconcile.Reque
 
 	autoImportSecret, err := r.informerHolder.AutoImportSecretLister.Secrets(managedClusterName).Get(constants.AutoImportSecretName)
 	if errors.IsNotFound(err) {
-		// the auto import secret has not be created or has been deleted, do nothing
+		// the auto import secret has not been created or has been deleted, do nothing
 		return reconcile.Result{}, nil
 	}
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
-	manifestWork, err = createManagedKubeconfigManifestWork(managedCluster.Name, autoImportSecret, managementCluster)
+	manifestWork, err = createManagedKubeconfigManifestWork(managedCluster.Name, autoImportSecret, managementClusterName)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -199,6 +209,52 @@ func (r *ReconcileHosted) Reconcile(ctx context.Context, request reconcile.Reque
 	reqLogger.Info(fmt.Sprintf("External managed kubeconfig is created, try to delete its auto import secret %s/%s",
 		autoImportSecret.Namespace, autoImportSecret.Name))
 	return reconcile.Result{}, helpers.DeleteAutoImportSecret(ctx, r.clientHolder.KubeClient, autoImportSecret, r.recorder)
+}
+
+func (r *ReconcileHosted) validateHostingCluster(ctx context.Context,
+	managementClusterName string, managedClusterName string) (bool, error) {
+	managementCluster := &clusterv1.ManagedCluster{}
+	err := r.clientHolder.RuntimeClient.Get(ctx, types.NamespacedName{Name: managementClusterName}, managementCluster)
+	if errors.IsNotFound(err) {
+		errStatus := helpers.UpdateManagedClusterStatus(r.clientHolder.RuntimeClient, r.recorder, managedClusterName, metav1.Condition{
+			Type:    "HostingClusterValid",
+			Status:  metav1.ConditionFalse,
+			Message: fmt.Sprintf("the hosting cluster %s is not exist", managementClusterName),
+			Reason:  "HostingClusterNotExist",
+		})
+		if errStatus != nil {
+			return true, errStatus
+		}
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+
+	if !managementCluster.DeletionTimestamp.IsZero() {
+		errStatus := helpers.UpdateManagedClusterStatus(r.clientHolder.RuntimeClient, r.recorder, managedClusterName, metav1.Condition{
+			Type:    "HostingClusterValid",
+			Status:  metav1.ConditionFalse,
+			Message: fmt.Sprintf("the hosting cluster %s is in deletion status", managementClusterName),
+			Reason:  "HostingClusterInDeletion",
+		})
+		if errStatus != nil {
+			return true, errStatus
+		}
+		return true, nil
+	}
+
+	errStatus := helpers.UpdateManagedClusterStatus(r.clientHolder.RuntimeClient, r.recorder, managedClusterName, metav1.Condition{
+		Type:    "HostingClusterValid",
+		Status:  metav1.ConditionTrue,
+		Message: fmt.Sprintf("the hosting cluster %s is valid", managementClusterName),
+		Reason:  "HostingClusterOK",
+	})
+	if errStatus != nil {
+		return true, errStatus
+	}
+
+	return false, nil
 }
 
 func klusterletNamespace(managedCluster string) string {
